@@ -1,10 +1,6 @@
-import os
-import argparse
-import numpy as np
+readrange = [0, 5000]
+topk = 10
 import torch
-from torchvision import transforms
-from PIL import Image
-import torchvision
 import torch.nn as nn
 import torchvision
 from torch.autograd import Variable
@@ -17,51 +13,56 @@ import os
 import time
 import perlin_noise
 
-topk = 10
 use_gpu = torch.cuda.is_available()
 device = torch.device("cuda" if use_gpu else "cpu")
+data_transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # 此种归一化，最大值约为2.2489，最小值约为-2.1179
+    # transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]) # 此种归一化，最大值为1，最小值为-1
+])
 
-parser = argparse.ArgumentParser('Running script', add_help=False)
-parser.add_argument('--input_dir', default='../input_dir', type=str)
-parser.add_argument('--output_dir', default='../output_dir', type=str)
 
-class ImageNetDataset(torch.utils.data.Dataset):
-
-    def __init__(self, data_dir, meta_file, transform=None):
-
-        self.data_dir = data_dir
-        self.meta_file = meta_file
+# 读取比赛数据集
+class ImageNetDataSet5000(Dataset):
+    def __init__(self, transform=None, loader=default_loader):
+        # 读取数据路径
+        img_names = []
+        img_labels = []
+        count = 0
+        with open('F:/AliTianChi/ali_6_attack/imagenet_round1_210122/dev.csv', 'rt') as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                count = count + 1
+                if count < readrange[0] or count > readrange[1]:
+                    continue
+                file_name = row['ImageId']
+                file_tag = row['TrueLabel']
+                img_names.append(file_name)
+                img_labels.append(int(file_tag))
+        self.img_names = img_names
+        self.img_labels = img_labels
+        # 目标转换
         self.transform = transform
-        self._indices = []
+        # 图像加载器
+        self.loader = loader
 
-        with open(os.path.join(data_dir, meta_file)) as f:
-            for line in f.readlines()[1:]:
-                img_path, label = line.strip().split(',')
-                self._indices.append((os.path.join(self.data_dir, 'images', img_path), label))
+    def __len__(self):
+        return len(self.img_names)
 
-    def __len__(self): 
-        return len(self._indices)
+    def __getitem__(self, idx):
 
-    def __getitem__(self, index):
-        img_path, label = self._indices[index]
-        img = Image.open(img_path).convert('RGB')
-        label = int(label)
-        img_name = img_path.split('/')[-1]
+        img_name = self.img_names[idx]
+        label = self.img_labels[idx]
+
+        # ori_path = 'F:\\AliTianChi\\ali_6_attack\\attack\\attack_base-30分\\attack_base'
+        ori_path = 'F:\\AliTianChi\\ali_6_attack\\imagenet_round1_210122\\images'
+        # 读取原图像
+        img = self.loader(os.path.join(ori_path, self.img_names[idx]))
+        # 进行transform变换
         if self.transform is not None:
             img = self.transform(img)
+
         return img, label, img_name
-
-
-def tensor2img(input_tensor, save_dir, save_name):
-
-    if input_tensor.is_cuda == True:
-        input_tensor = input_tensor.cpu()
-
-    input_tensor = input_tensor.permute(0, 2, 3, 1).data.numpy()
-    for i in range(input_tensor.shape[0]):
-        Image.fromarray((input_tensor[i] * 255).astype(np.uint8)).save('{}/{}'.format(save_dir, save_name[i]))
-        print('{} saved in {}.'.format(save_name[i], save_dir))
-
 
 
 # 对图像进行分类
@@ -209,13 +210,13 @@ def get_models():
 
     model_3 = torchvision.models.resnet50()
     model_3 = torch.nn.DataParallel(model_3)
-    check_point_3 = torch.load('code/imagenet_model_weights_4px.pth')
+    check_point_3 = torch.load('F:\\AliTianChi\\ali_6_attack\\白盒防御模型\\Imagenet和Cifar\\imagenet-fast_at\\imagenet_model_weights_4px.pth')
     model_3.load_state_dict(check_point_3['state_dict'])
     model_3.to(device)
 
     model_4 = torchvision.models.resnet50()
     model_4 = torch.nn.DataParallel(model_4)
-    check_point_4 = torch.load('code/model_best.pth.tar')
+    check_point_4 = torch.load('F:\\AliTianChi\\ali_6_attack\\白盒防御模型\\Imagenet和Cifar\\imagenet-free_at\\model_best.pth.tar')
     model_4.load_state_dict(check_point_4['state_dict'])
     model_4.to(device)
 
@@ -227,7 +228,7 @@ def get_models():
     # model_9 = torch.hub.load('huawei-noah/ghostnet', 'ghostnet_1x', pretrained=True).to(device)
     # model_10 = torch.hub.load('facebookresearch/WSL-Images', 'resnext101_32x16d_wsl', pretrained=True).to(device)
     # model_11 = torchvision.models.resnext101_32x8d(pretrained=True).to(device)
-    model_12 = torch.hub.load('zhanghang1989/ResNeSt', 'resnest101', pretrained=True).to(device)
+    model_12 = torch.hub.load('zhanghang1989/ResNeSt', 'resnest269', pretrained=True).to(device)
 
     model_1.eval()
     # model_2.eval()
@@ -278,23 +279,18 @@ def save_imgs(img_names, result_imgs, labels, models, dir_path, count):
     return count
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     start = time.time()
-    args = parser.parse_args()
-
-    data_transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # 此种归一化，最大值约为2.2489，最小值约为-2.1179
-    ])
+    dir_path = 'output_dir'
     # 加载模型们
     models = get_models()
     pgd = PGD(models)
 
-    dataset = ImageNetDataset(data_dir=args.input_dir, meta_file='dev.csv', transform=data_transform)
-    data_loader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False, num_workers=4)
+    img_dataset = ImageNetDataSet5000(transform=data_transform)
+    attack_data_loader = DataLoader(dataset=img_dataset, num_workers=0, batch_size=1, shuffle=False)
 
     count = 0
-    for i, (ori_imgs, labels, img_names) in enumerate(data_loader):
+    for i, (ori_imgs, labels, img_names) in enumerate(attack_data_loader):
         loop_start = time.time()
         # 加载至加速计算设备
         ori_imgs = ori_imgs.to(device)
@@ -302,9 +298,7 @@ if __name__ == '__main__':
         # 使用PGD生成对抗图像
         adv_imgs = pgd.generate(x=ori_imgs, y=labels)
         # 保存对抗图像
-        count = save_imgs(img_names, adv_imgs, labels, models, args.output_dir, count)
+        count = save_imgs(img_names, adv_imgs, labels, models, dir_path, count)
         print(f'img_names={img_names} 攻击完成，耗时={time.time() - loop_start} 共计失败{count}次\n')
 
     print(f'攻击完成，耗时={time.time() - start} 攻击失败{count}次\n')
-
-    
